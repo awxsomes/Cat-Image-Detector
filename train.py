@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 
 import config
+from common import feature_dim
 
 
 def load_data(path):
@@ -84,6 +85,15 @@ def main():
     torch.manual_seed(args.seed)
     X, y_str, groups = load_data(config.DATA_CSV)
 
+    # The feature width tells us whether hands were recorded; the checkpoint
+    # carries that forward so run.py can never load a mismatched extractor.
+    use_hands = X.shape[1] == feature_dim(True)
+    if not use_hands and X.shape[1] != feature_dim(False):
+        raise SystemExit(f"Unexpected feature width {X.shape[1]} in {config.DATA_CSV}")
+    if use_hands != config.USE_HANDS:
+        print(f"note: data was recorded with USE_HANDS={use_hands}, "
+              f"config says {config.USE_HANDS}. Following the data.")
+
     classes = [c for c in config.EXPRESSIONS if c in set(y_str)]
     missing = set(y_str) - set(classes)
     if missing:
@@ -94,7 +104,8 @@ def main():
     y = np.array([idx[c] for c in y_str])
 
     tr, va = session_split(y_str, groups, args.val_frac, args.seed)
-    print(f"{len(X)} samples, {len(set(groups))} sessions, {len(classes)} classes")
+    print(f"{len(X)} samples, {len(set(groups))} sessions, {len(classes)} classes, "
+          f"{X.shape[1]} features (hands: {use_hands})")
     print(f"train {tr.sum()} / val {va.sum()}")
 
     mean, std = X[tr].mean(0), X[tr].std(0) + 1e-6
@@ -169,6 +180,7 @@ def main():
         "mean": mean,
         "std": std,
         "n_in": X.shape[1],
+        "use_hands": use_hands,
     }, config.MODEL_PATH)
     print(f"\nsaved -> {config.MODEL_PATH}")
 

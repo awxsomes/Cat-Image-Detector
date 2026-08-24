@@ -21,10 +21,10 @@ import cv2
 import numpy as np
 
 import config
-from common import make_landmarker, bgr_to_mp_image, extract_features
+from common import FeatureExtractor, feature_dim
 
 
-def load_existing(path):
+def load_existing(path, expected_dim=None):
     """Return (rows, next_session_id, counts_per_label)."""
     if not os.path.exists(path):
         return [], 0, Counter()
@@ -35,6 +35,11 @@ def load_existing(path):
         for row in csv.reader(f):
             if not row or row[0] == "label":
                 continue
+            if expected_dim is not None and len(row) - 2 != expected_dim:
+                raise SystemExit(
+                    f"{path} has {len(row) - 2}-dim features but the current "
+                    f"config produces {expected_dim}. You changed USE_HANDS "
+                    f"after collecting. Move the old file aside and re-record.")
             rows.append(row)
             counts[row[0]] += 1
             max_session = max(max_session, int(row[1]))
@@ -49,21 +54,21 @@ def main():
                          "without losing information)")
     args = ap.parse_args()
 
+    dim = feature_dim(config.USE_HANDS)
     os.makedirs(os.path.dirname(config.DATA_CSV) or ".", exist_ok=True)
-    _, session_id, counts = load_existing(config.DATA_CSV)
+    _, session_id, counts = load_existing(config.DATA_CSV, dim)
 
     new_file = not os.path.exists(config.DATA_CSV)
     csv_file = open(config.DATA_CSV, "a", newline="")
     writer = csv.writer(csv_file)
     if new_file:
-        writer.writerow(["label", "session"] +
-                        [f"bs{i}" for i in range(config.N_BLENDSHAPES)])
+        writer.writerow(["label", "session"] + [f"f{i}" for i in range(dim)])
 
     cap = cv2.VideoCapture(config.CAMERA_INDEX)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open camera {config.CAMERA_INDEX}")
 
-    landmarker = make_landmarker()
+    extractor = FeatureExtractor()
 
     label_idx = 0
     recording = False
@@ -83,8 +88,7 @@ def main():
             frame = cv2.flip(frame, 1)
 
         ts_ms = int((time.time() - t0) * 1000)
-        result = landmarker.detect_for_video(bgr_to_mp_image(frame), ts_ms)
-        feats = extract_features(result)
+        feats, hand_present = extractor.process(frame, ts_ms)
 
         if recording and feats is not None:
             if frame_i % args.stride == 0:
@@ -106,6 +110,10 @@ def main():
         if feats is None:
             cv2.putText(frame, "NO FACE", (12, 96),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
+        elif config.USE_HANDS:
+            cv2.putText(frame, "hand: yes" if hand_present else "hand: --",
+                        (12, 96), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (0, 255, 0) if hand_present else (150, 150, 150), 2)
         for i, name in enumerate(config.EXPRESSIONS):
             cv2.putText(frame, f"{i+1} {name}: {counts[name]}",
                         (12, h - 12 - 22 * (len(config.EXPRESSIONS) - 1 - i)),
@@ -134,7 +142,7 @@ def main():
             _undo_session(config.DATA_CSV, drop)
             csv_file = open(config.DATA_CSV, "a", newline="")
             writer = csv.writer(csv_file)
-            _, _, counts = load_existing(config.DATA_CSV)
+            _, _, counts = load_existing(config.DATA_CSV, dim)
             print(f"  removed session {drop}")
         elif ord("1") <= key <= ord("9"):
             i = key - ord("1")
@@ -144,7 +152,7 @@ def main():
     if recording:
         print(f"  session {session_id}: {burst_count} samples")
     csv_file.close()
-    landmarker.close()
+    extractor.close()
     cap.release()
     cv2.destroyAllWindows()
 
