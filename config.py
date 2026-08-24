@@ -8,6 +8,7 @@ EXPRESSIONS = [
     "shocked",
     "thumbsup",
     "tongue",
+    "smile",
     "other",
 ]
 
